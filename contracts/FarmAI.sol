@@ -4,6 +4,7 @@ pragma solidity ^0.8.11;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
+import "hardhat/console.sol";
 
 interface IUniswapV2Factory {
     function createPair(address tokenA, address tokenB) external returns (address pair);
@@ -38,21 +39,22 @@ contract FarmAI is ERC20, Ownable {
   mapping(address => bool) public tradingWhiteList;
   
   modifier canTrade(address from, address to){
-    require(tradingEnabled || tradingWhiteList[from] || tradingWhiteList[to]);
+    require(tradingEnabled || tradingWhiteList[from] || tradingWhiteList[to], "FAI: Trading has not started");
     _;
   }
 
 
-  constructor() ERC20("FarmAI Token", "FAI") {
+  constructor(address uniswapRouterAddress) ERC20("FarmAI Token", "FAI") {
     fees = Fees(500, 500, 1_000, 500, 500, 1_000, 0);
     liquidationSettings = LiquidationSettings(1_000 ether, 10_000, false, true);
     teamWallet = liquidityWallet = msg.sender;
     // FAI pair.
-    uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+    uniswapRouter = IUniswapV2Router02(uniswapRouterAddress);
     address pairAddress = IUniswapV2Factory(uniswapRouter.factory()).createPair(address(this), uniswapRouter.WETH());
     takeFeesFor[pairAddress] = true;
+    // Super powers for deployer.
+    tradingWhiteList[msg.sender] = true;
     ignoreFees[msg.sender] = true;
-
     _mint(msg.sender, TOTAL_SUPPLY);
   }
 
