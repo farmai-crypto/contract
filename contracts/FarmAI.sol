@@ -150,7 +150,7 @@ contract FarmAI is ERC20, Ownable {
   // Recovery
   // Reclaim tokens accidentally sent to contract.
   function recoverERC20(address token, uint balance) external onlyOwner {
-    IERC20(token).transferFrom(address(this), owner(), balance);
+    IERC20(token).transfer(owner(), balance);
   }
   // Recover ETH sent to contract.
   function recoverETH(uint balance) external onlyOwner {
@@ -160,7 +160,7 @@ contract FarmAI is ERC20, Ownable {
   function setFees(
     uint16 buyTeam, uint16 buyAutoLiquidity,
     uint16 sellTeam, uint16 sellAutoLiquidity
-    ) external {
+    ) external onlyOwner {
       // Maximum of 30% each.
       uint16 buyTotal = buyTeam + buyAutoLiquidity;
       uint16 sellTotal = sellTeam + sellAutoLiquidity;
@@ -187,6 +187,7 @@ contract FarmAI is ERC20, Ownable {
   }
   // Update liquidation settings.
   function setLiquidationSettings(uint128 liquidationThreshold, uint16 percentageToLiquidate, bool liquidationEnabled) external onlyOwner {
+    require(liquidationThreshold <= TOTAL_SUPPLY && percentageToLiquidate <= 10_000, "FAI: INVALID_LIQ_SETT");
     liquidationSettings = LiquidationSettings(liquidationThreshold, percentageToLiquidate, false, liquidationEnabled);
   }
   // Trading
