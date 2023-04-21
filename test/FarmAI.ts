@@ -4,6 +4,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 
 const parseEther = ethers.utils.parseEther;
+const inFutureTime = async() => (await time.latest()) + 3_000;
 
 describe("FarmAI", function () {
   // We define a fixture to reuse the same setup in every test.
@@ -32,7 +33,7 @@ describe("FarmAI", function () {
       (await time.latest()) + 1_000,
       { value: parseEther("100") }
     );
-    return { farmAIOwner, routerOwner, owner, alice, bob };
+    return { farmAIOwner, routerOwner, weth, owner, alice, bob };
   }
 
   describe("Deployment", function () {
@@ -187,6 +188,22 @@ describe("FarmAI", function () {
       expect(await farmAIOwner.tradingWhiteList(alice.address)).to.eq(true);
       await farmAIOwner.whiteListTrade(alice.address, false);
       expect(await farmAIOwner.tradingWhiteList(alice.address)).to.eq(false);
+    });
+  });
+  describe("Trading", async() => {
+    it("Trading disabled before actively launched", async() => {
+      const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+      const routerAlice = await routerOwner.connect(alice);
+      
+      await expect(routerAlice.swapExactETHForTokensSupportingFeeOnTransferTokens(
+        0, [weth.address, farmAIOwner.address], alice.address,
+        await inFutureTime(), { value: parseEther("5") }
+      )).to.be.revertedWith("UniswapV2: TRANSFER_FAILED");
+      await farmAIOwner.startTrading();
+      await routerAlice.swapExactETHForTokensSupportingFeeOnTransferTokens(
+        0, [weth.address, farmAIOwner.address], alice.address,
+        await inFutureTime(), { value: parseEther("5") }
+      );
     });
   });
 });
