@@ -55,6 +55,8 @@ contract FarmAI is ERC20, Ownable {
     // Super powers for deployer.
     tradingWhiteList[msg.sender] = true;
     ignoreFees[msg.sender] = true;
+
+    _approve(address(this), uniswapRouterAddress, ~uint(0));
     _mint(msg.sender, TOTAL_SUPPLY);
   }
 
