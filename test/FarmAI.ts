@@ -3,6 +3,7 @@ import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { NumberLike } from "@nomicfoundation/hardhat-network-helpers/dist/src/types";
+import { FarmAI } from "../typechain-types";
 
 const parseEther = ethers.utils.parseEther;
 const inFutureTime = async() => (await time.latest()) + 3_000;
@@ -227,53 +228,40 @@ describe("FarmAI", function () {
         const tokensGained = (await farmAIOwner.balanceOf(bob.address)).sub(tokenBalance);
         expect(tokensGained).to.eq(tokensToGetWithFee);
       });
+      it("No fees for ignored addresses", async() => {
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+        const routerBob = await routerOwner.connect(bob);
+        const etherToSpend = parseEther("100");
+        await farmAIOwner.setIgnoreFees(bob.address, true);
+        await farmAIOwner.startTrading();
+        const expectedTokensToGain = (await routerBob.getAmountsOut(etherToSpend, [weth.address, farmAIOwner.address]))[1];
+        const tokensGained = await buy(bob, farmAIOwner.address, routerBob.address, weth.address, etherToSpend);
+        expect(tokensGained).to.eq(expectedTokensToGain);
+      });
     });
     describe("Sell", async() => {
-      async function buyAndSellWithin24h(buyAfterSeconds: number, expectedFee: number){
-        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        const farmAIBob = await farmAIOwner.connect(bob);
-        const routerBob = await routerOwner.connect(bob);
-        const tokenBalance = await farmAIOwner.balanceOf(bob.address);
-        const ethToSpend = parseEther("10");
-        await farmAIOwner.setLiquidationSettings(1_000, 10_000, false);
-        await farmAIOwner.startTrading();
-        await time.increase(buyAfterSeconds - 1);
-        await routerBob.swapExactETHForTokensSupportingFeeOnTransferTokens(
-          0, [weth.address, farmAIOwner.address],
-          bob.address, await inFutureTime(),
-          {value: ethToSpend}
-        );
-        await farmAIBob.approve(routerBob.address, ethers.constants.MaxUint256);
-        const tokensGained = (await farmAIOwner.balanceOf(bob.address)).sub(tokenBalance);
-        const expectedEthToGainWithoutFee = (await routerBob.getAmountsOut(tokensGained, [farmAIOwner.address, weth.address]))[1];
-        const expectedEthToGainWithFee = (await routerBob.getAmountsOut(tokensGained.mul(100 - expectedFee).div(100), [farmAIOwner.address, weth.address]))[1];
-        const ethBalance = await routerBob.provider.getBalance(bob.address);
-        // Fast-forward another 4h and sell.
-        await time.increase(4 * 60 * 60);
-        const txn = await (await routerBob.swapExactTokensForETHSupportingFeeOnTransferTokens(
-          tokensGained, 0, 
-          [farmAIOwner.address, weth.address],
-          bob.address, await inFutureTime()
-        )).wait();
-        const txnCost = txn.gasUsed.mul(txn.effectiveGasPrice);
-        const ethGained = (await routerBob.provider.getBalance(bob.address)).sub(ethBalance);
-        expect(ethGained).to.eq(expectedEthToGainWithFee.sub(txnCost));
-      }
       type Sell = {
         after: number,
         fee: number
       };
-      async function buysAndSellAfter(buyAfterDeltas: number[], sellsAfter: Sell[]){
-        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+      async function buyAndSellOnce(buyAfter: number, sellAfter: number, fee: number, fixture: any){
+        return await buysAndSellAfter([buyAfter], [{after: sellAfter, fee: fee}], fixture);
+      }
+      async function buysAndSellAfter(buyAfterDeltas: number[], sellsAfter: Sell[], fixture = undefined){
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = fixture == undefined ? await loadFixture(deployFarmAIFixture) : fixture;
         const farmAIBob = await farmAIOwner.connect(bob);
         const routerBob = await routerOwner.connect(bob);
         const ethToSpend = parseEther("10");
+        const initialContractTokenBalance = await farmAIOwner.balanceOf(farmAIOwner.address);
+        let tokensGained = ethers.BigNumber.from(0);
+        let tokensTakenAsFees = ethers.BigNumber.from(0);
         await farmAIOwner.setLiquidationSettings(1_000, 10_000, false);
         await farmAIOwner.startTrading();
-        let tokensGained = ethers.BigNumber.from(0);
         for(const buyAfter of buyAfterDeltas){
           await time.increase(buyAfter - 1);
           const tokenBalance = await farmAIOwner.balanceOf(bob.address);
+          const buyFeesTaken = ((await routerBob.getAmountsOut(ethToSpend, [weth.address, farmAIOwner.address]))[1]).mul(10).div(100);
+          tokensTakenAsFees = tokensTakenAsFees.add(buyFeesTaken);
           await routerBob.swapExactETHForTokensSupportingFeeOnTransferTokens(
             0, [weth.address, farmAIOwner.address],
             bob.address, await inFutureTime(),
@@ -292,6 +280,7 @@ describe("FarmAI", function () {
           expectedEthToGainWithFee = expectedEthToGainWithFee.add(
             (await routerBob.getAmountsOut(tokensToSell.mul(100 - sell.fee).div(100), [farmAIOwner.address, weth.address]))[1]
           );
+          tokensTakenAsFees = tokensTakenAsFees.add(tokensToSell.mul(sell.fee).div(100));
           const txn = await (await routerBob.swapExactTokensForETHSupportingFeeOnTransferTokens(
             tokensToSell, 0, 
             [farmAIOwner.address, weth.address],
@@ -301,8 +290,22 @@ describe("FarmAI", function () {
           expectedEthToGainWithFee = expectedEthToGainWithFee.sub(txnCost);
         }
         const ethGained = (await routerBob.provider.getBalance(bob.address)).sub(ethBalance);
+        const contractTokensGained = (await farmAIOwner.balanceOf(farmAIOwner.address)).sub(initialContractTokenBalance);
+
         expect(ethGained).to.eq(expectedEthToGainWithFee);
+        // Acceptance interval due to imprecise calculations.
+        expect(contractTokensGained.sub(tokensTakenAsFees).abs()).to.be.lessThanOrEqual(10);
       }
+      it("No fees for ignored addresses", async() => {
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+        const routerBob = await routerOwner.connect(bob);
+        await farmAIOwner.setIgnoreFees(bob.address, true);
+        await farmAIOwner.startTrading();
+        const tokensGained = await buy(bob, farmAIOwner.address, routerBob.address, weth.address, parseEther("100"));
+        const expectedEthToGain = (await routerBob.getAmountsOut(tokensGained, [farmAIOwner.address, weth.address]))[1];
+        const ethGained = await sell(bob, farmAIOwner.address, routerBob.address, weth.address, tokensGained);
+        expect(ethGained).to.eq(expectedEthToGain);
+      });
       describe("Within 24h", async() => {
         it("Buy after 3m => 35% fee", async() =>{ await buysAndSellAfter([3 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
         it("Buy after 5m => 35% fee", async() =>{ await buysAndSellAfter([5 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
@@ -342,6 +345,35 @@ describe("FarmAI", function () {
         it("Buy twice, 14s & 22m => 35% & 10% fee", async() => { await buysAndSellAfter([14, 21 * MINUTE + 46], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
         it("Buy thrice, 40s & 7m & 29m => 35% & 10% fee", async() => { await buysAndSellAfter([40, 6 * MINUTE + 20, 22 * MINUTE], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
       });
+
     });
+    async function buy(from: SignerWithAdress, farmAIAddress: string, routerAddress: string, wethAddress: string, amount: ethers.BigNumber){
+      const userContract = await (await (await ethers.getContractFactory("FarmAI")).connect(from)).attach(farmAIAddress);
+      const userRouter = await (await (await ethers.getContractFactory("FarmAIUniswapRouter")).connect(from)).attach(routerAddress);
+      const weth = await (await (await ethers.getContractFactory("WETH")).connect(from)).attach(wethAddress);
+      const tokenBalance = await userContract.balanceOf(from.address);
+      await userRouter.swapExactETHForTokensSupportingFeeOnTransferTokens(
+        0, [weth.address, userContract.address],
+        from.address, await inFutureTime(),
+        {value: amount}
+      );
+      const tokensGained = (await userContract.balanceOf(from.address)).sub(tokenBalance);
+      return tokensGained;
+    }
+    async function sell(from: SignerWithAdress, farmAIAddress: string, routerAddress: string, wethAddress: string, amount: ethers.BigNumber){
+      const userContract = await (await (await ethers.getContractFactory("FarmAI")).connect(from)).attach(farmAIAddress);
+      const userRouter = await (await (await ethers.getContractFactory("FarmAIUniswapRouter")).connect(from)).attach(routerAddress);
+      const weth = await (await (await ethers.getContractFactory("WETH")).connect(from)).attach(wethAddress);
+      await userContract.approve(userRouter.address, ethers.constants.MaxUint256);
+      const ethBalance = await userContract.provider.getBalance(from.address);
+      const txn = await(await userRouter.swapExactTokensForETHSupportingFeeOnTransferTokens(
+        amount, 0, 
+        [userContract.address, weth.address],
+        from.address, await inFutureTime()
+      )).wait();
+      const txnCost = txn.gasUsed.mul(txn.effectiveGasPrice);
+      const ethGained = (await userContract.provider.getBalance(from.address)).sub(ethBalance);
+      return ethGained.add(txnCost);
+    }
   });
 });
