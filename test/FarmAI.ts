@@ -7,6 +7,10 @@ import { NumberLike } from "@nomicfoundation/hardhat-network-helpers/dist/src/ty
 const parseEther = ethers.utils.parseEther;
 const inFutureTime = async() => (await time.latest()) + 3_000;
 
+// Utility constants.
+const HOUR = 3600;
+const MINUTE = 60;
+
 describe("FarmAI", function () {
   // We define a fixture to reuse the same setup in every test.
   // We use loadFixture to run this setup once, snapshot that state,
@@ -225,15 +229,15 @@ describe("FarmAI", function () {
       });
     });
     describe("Sell", async() => {
-      async function buyAndSellWithin24h(buyAfterSeconds: NumberLike, expectedFee: number){
+      async function buyAndSellWithin24h(buyAfterSeconds: number, expectedFee: number){
         const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
         const farmAIBob = await farmAIOwner.connect(bob);
         const routerBob = await routerOwner.connect(bob);
         const tokenBalance = await farmAIOwner.balanceOf(bob.address);
         const ethToSpend = parseEther("10");
-        await farmAIOwner.startTrading();
         await farmAIOwner.setLiquidationSettings(1_000, 10_000, false);
-        await time.increase(buyAfterSeconds);
+        await farmAIOwner.startTrading();
+        await time.increase(buyAfterSeconds - 1);
         await routerBob.swapExactETHForTokensSupportingFeeOnTransferTokens(
           0, [weth.address, farmAIOwner.address],
           bob.address, await inFutureTime(),
@@ -255,28 +259,89 @@ describe("FarmAI", function () {
         const ethGained = (await routerBob.provider.getBalance(bob.address)).sub(ethBalance);
         expect(ethGained).to.eq(expectedEthToGainWithFee.sub(txnCost));
       }
-      it("Buy 3m after start, sell within 24h: 35% fee", async() =>{
-        await buyAndSellWithin24h(3 * 60, 35);
+      type Sell = {
+        after: number,
+        fee: number
+      };
+      async function buysAndSellAfter(buyAfterDeltas: number[], sellsAfter: Sell[]){
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+        const farmAIBob = await farmAIOwner.connect(bob);
+        const routerBob = await routerOwner.connect(bob);
+        const ethToSpend = parseEther("10");
+        await farmAIOwner.setLiquidationSettings(1_000, 10_000, false);
+        await farmAIOwner.startTrading();
+        let tokensGained = ethers.BigNumber.from(0);
+        for(const buyAfter of buyAfterDeltas){
+          await time.increase(buyAfter - 1);
+          const tokenBalance = await farmAIOwner.balanceOf(bob.address);
+          await routerBob.swapExactETHForTokensSupportingFeeOnTransferTokens(
+            0, [weth.address, farmAIOwner.address],
+            bob.address, await inFutureTime(),
+            {value: ethToSpend}
+          );
+          const tokensGainedForPurchase = (await farmAIOwner.balanceOf(bob.address)).sub(tokenBalance);
+          tokensGained = tokensGained.add(tokensGainedForPurchase);
+        }
+        await farmAIBob.approve(routerBob.address, ethers.constants.MaxUint256);
+        const ethBalance = await routerBob.provider.getBalance(bob.address);
+        // Fast-forward and sell.
+        const tokensToSell = tokensGained.div(sellsAfter.length);
+        let expectedEthToGainWithFee = ethers.BigNumber.from(0);
+        for(const sell of sellsAfter){
+          await time.increase(sell.after);
+          expectedEthToGainWithFee = expectedEthToGainWithFee.add(
+            (await routerBob.getAmountsOut(tokensToSell.mul(100 - sell.fee).div(100), [farmAIOwner.address, weth.address]))[1]
+          );
+          const txn = await (await routerBob.swapExactTokensForETHSupportingFeeOnTransferTokens(
+            tokensToSell, 0, 
+            [farmAIOwner.address, weth.address],
+            bob.address, await inFutureTime()
+          )).wait();
+          const txnCost = txn.gasUsed.mul(txn.effectiveGasPrice);
+          expectedEthToGainWithFee = expectedEthToGainWithFee.sub(txnCost);
+        }
+        const ethGained = (await routerBob.provider.getBalance(bob.address)).sub(ethBalance);
+        expect(ethGained).to.eq(expectedEthToGainWithFee);
+      }
+      describe("Within 24h", async() => {
+        it("Buy after 3m => 35% fee", async() =>{ await buysAndSellAfter([3 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
+        it("Buy after 5m => 35% fee", async() =>{ await buysAndSellAfter([5 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
+        it("Buy after 5m1s => 25% fee", async() =>{ await buysAndSellAfter([5 * MINUTE + 1], [{after: 4 * HOUR, fee: 25}]); });
+        it("Buy after 15m => 25%fee", async() =>{ await buysAndSellAfter([15 * MINUTE], [{after: 4 * HOUR, fee: 25}]); });
+        it("Buy after 15m1s => 20%fee", async() =>{ await buysAndSellAfter([15 * MINUTE + 1], [{after: 4 * HOUR, fee: 20}]); });
+        it("Buy after 30m => 20%fee", async() =>{ await buysAndSellAfter([30 * MINUTE], [{after: 4 * HOUR, fee: 20}]); });
+        it("Buy after 30m1s => 10%fee", async() =>{ await buysAndSellAfter([30 * MINUTE + 1], [{after: 4 * HOUR, fee: 10}]); });
+        it("Buy twice, 3m30s & 10m30s => 35% fee", async() => { await buysAndSellAfter([3 * MINUTE + 30, 7 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
+        it("Buy twice, 14m20s & 24m => 25% fee", async() => { await buysAndSellAfter([14 * MINUTE + 20, 9 * MINUTE + 40], [{after: 4 * HOUR, fee: 25}]); });
+        it("Buy twice, 14s & 22m => 35% fee", async() => { await buysAndSellAfter([14, 21 * MINUTE + 46], [{after: 4 * HOUR, fee: 35}]); });
+        it("Buy thrice, 40s & 7m & 29m => 35% fee", async() => { await buysAndSellAfter([40, 6 * MINUTE + 20, 22 * MINUTE], [{after: 4 * HOUR, fee: 35}]); });
       });
-      it("Buy 5m after start, sell within 24h: 35% fee", async() =>{
-        await buyAndSellWithin24h(3 * 60, 35);
+      describe("After 24h", async() => {
+        it("Buy after 3m => 10% fee", async() =>{ await buysAndSellAfter([3 * MINUTE], [{after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 5m => 10% fee", async() =>{ await buysAndSellAfter([5 * MINUTE], [{after: 24 * HOUR + 2, fee: 10}]); });
+        it("Buy after 5m1s => 10% fee", async() =>{ await buysAndSellAfter([5 * MINUTE + 1], [{after: 24 * HOUR + 3, fee: 10}]); });
+        it("Buy after 15m => 10%fee", async() =>{ await buysAndSellAfter([15 * MINUTE], [{after: 24 * HOUR + 5, fee: 10}]); });
+        it("Buy after 15m1s => 10%fee", async() =>{ await buysAndSellAfter([15 * MINUTE + 1], [{after: 25 * HOUR, fee: 10}]); });
+        it("Buy after 30m => 10%fee", async() =>{ await buysAndSellAfter([30 * MINUTE], [{after: 30 * HOUR, fee: 10}]); });
+        it("Buy after 30m1s => 10%fee", async() =>{ await buysAndSellAfter([30 * MINUTE + 1], [{after: 36 * HOUR, fee: 10}]); });
+        it("Buy twice, 3m30s & 10m30s => 10% fee", async() => { await buysAndSellAfter([3 * MINUTE + 30, 7 * MINUTE], [{after: 37 * HOUR, fee: 10}]); });
+        it("Buy twice, 14m20s & 24m => 10% fee", async() => { await buysAndSellAfter([14 * MINUTE + 20, 9 * MINUTE + 40], [{after: 44 * HOUR, fee: 10}]); });
+        it("Buy twice, 14s & 22m => 10% fee", async() => { await buysAndSellAfter([14, 21 * MINUTE + 46], [{after: 56 * HOUR, fee: 10}]); });
+        it("Buy thrice, 40s & 7m & 29m => 10% fee", async() => { await buysAndSellAfter([40, 6 * MINUTE + 20, 22 * MINUTE], [{after: 69 * HOUR, fee: 10}]); });
       });
-      it("Buy 5m1s after start, sell within 24h: 25% fee", async() =>{
-        await buyAndSellWithin24h(3 * 60, 25);
-      });
-      it("Buy 15m after start, sell within 24h: 25%fee", async() =>{
-        await buyAndSellWithin24h(15 * 60, 25);
-      });
-      it("Buy 15m1s after start, sell within 24h: 20%fee", async() =>{
-        await buyAndSellWithin24h(15 * 60 + 1, 20);
-      });
-      it("Buy 30m after start, sell within 24h: 20%fee", async() =>{
-        await buyAndSellWithin24h(30 * 60, 20);
-      });
-      it("Buy 30m1s after start, sell within 24h: 10%fee", async() =>{
-        await buyAndSellWithin24h(30 * 60 + 1, 10);
+      describe("Once within 24h, once afterwards", async() => {
+        it("Buy after 3m => 35% & 10% fee", async() =>{ await buysAndSellAfter([3 * MINUTE], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 5m => 35% & 10% fee", async() =>{ await buysAndSellAfter([5 * MINUTE], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 5m1s => 25% & 10% fee", async() =>{ await buysAndSellAfter([5 * MINUTE + 1], [{after: 2 * HOUR, fee: 25}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 15m => 25% & 10% fee", async() =>{ await buysAndSellAfter([15 * MINUTE], [{after: 2 * HOUR, fee: 25}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 15m1s => 20% & 10% fee", async() =>{ await buysAndSellAfter([15 * MINUTE + 1], [{after: 2 * HOUR, fee: 20}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 30m => 20% & 10% fee", async() =>{ await buysAndSellAfter([30 * MINUTE], [{after: 2 * HOUR, fee: 20}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy after 30m1s => 10% & 10% fee", async() =>{ await buysAndSellAfter([30 * MINUTE + 1], [{after: 2 * HOUR, fee: 10}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy twice, 3m30s & 10m30s => 35% & 10% fee", async() => { await buysAndSellAfter([3 * MINUTE + 30, 7 * MINUTE], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy twice, 14m20s & 24m => 25% & 10% fee", async() => { await buysAndSellAfter([14 * MINUTE + 20, 9 * MINUTE + 40], [{after: 2 * HOUR, fee: 25}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy twice, 14s & 22m => 35% & 10% fee", async() => { await buysAndSellAfter([14, 21 * MINUTE + 46], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
+        it("Buy thrice, 40s & 7m & 29m => 35% & 10% fee", async() => { await buysAndSellAfter([40, 6 * MINUTE + 20, 22 * MINUTE], [{after: 2 * HOUR, fee: 35}, {after: 24 * HOUR + 1, fee: 10}]); });
       });
     });
-    
   });
 });
