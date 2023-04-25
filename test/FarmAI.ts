@@ -347,22 +347,21 @@ describe("FarmAI", function () {
       });
     });
     describe("Complex scenarios", async() => {
-      it("#1: 2 accs buy(5000/10000,1) eary and sell all within 24h", async() => {
+      it("#1: 2 accs buy (10eth/20eth) early and sell all within 24h", async() => {
         const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        const aliceEthToSpend = (await routerOwner.getAmountsIn(parseEther("5000"), [weth.address, farmAIOwner.address]))[0];
+        const aliceEthToSpend = parseEther("10");
         await farmAIOwner.startTrading();
         const ownerBalanceBefore = await farmAIOwner.provider.getBalance(owner.address);
         const aliceTokensEarned = await buy(alice, farmAIOwner.address, routerOwner.address, weth.address, aliceEthToSpend);
-        const bobEthToSpend = (await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address]))[0];
+        const bobEthToSpend = parseEther("20");
         await buy(bob, farmAIOwner.address, routerOwner.address, weth.address, bobEthToSpend);
         // Should not trigger liquidation yet.
         expect(await farmAIOwner.provider.getBalance(owner.address)).to.eq(ownerBalanceBefore);
         await sell(alice, farmAIOwner.address, routerOwner.address, weth.address, aliceTokensEarned);
-        // Buy some small amount.
-        await buy(bob, farmAIOwner.address, routerOwner.address, weth.address, parseEther("0.001"));
         const ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerBalanceBefore);
-        console.log(ownerEthGained);
-        console.log(aliceEthToSpend.add(bobEthToSpend));
+        // With a trading volume of 40 eth they should have at least gotten 1 eth or more.
+        expect(ownerEthGained).to.be.greaterThan(parseEther("1"));
+        expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.be.lessThanOrEqual(1);
       });
     });
     async function buy(from: SignerWithAdress, farmAIAddress: string, routerAddress: string, wethAddress: string, amount: ethers.BigNumber){
