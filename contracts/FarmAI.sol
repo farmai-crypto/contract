@@ -67,20 +67,21 @@ contract FarmAI is ERC20, Ownable {
   }
 
   function _takeFees(address from, address to, uint256 transferAmount) private returns(uint256 remainingTokens) {
-    // Skip certain wallets.
-    if(ignoreFees[from] || ignoreFees[to]) return transferAmount;
     // No fees to take.
     if(!takeFeesFor[from] && !takeFeesFor[to]) return transferAmount;
+    // Skip certain wallets.
+    if(ignoreFees[from] || ignoreFees[to]) return transferAmount;
     // Take fees.
     Fees memory transferFees = fees;
     uint feesToTake = 0;
     // Buy.
     if(takeFeesFor[from]){
       feesToTake += transferAmount * fees.buyTotal / FEE_DIVISOR;
-      // If the buy is within the first 5-30min of token release, we add an extra selling fee for 24h.
-      // This is used to stabilize the price after launch and to fight against sniper bots.
-      // It does not block sniper bots, but it can benefit the project and holders to a certain extend.
-      // First 5min: 25% - 15min: 15% - 30min: 10% extra sell fee within 24h.
+      // Early buyers pay an additional fee if they sell within 24h.
+      // Helps against sniper bots and stabilizes prices.
+      // Within 5min of start:  Extra 25% on sell.
+      // Within 15min of start: Extra 15% on sell.
+      // Within 30min of start: Extra 10% on sell.
       uint secondsPassedSinceStart = block.timestamp - fees.takeFeesTimestamp;
       if(secondsPassedSinceStart <= 30 minutes && extraFeeOnEarlySell[to] == 0){
         if(secondsPassedSinceStart <= 5 minutes)
