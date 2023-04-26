@@ -124,9 +124,6 @@ contract FarmAI is ERC20, Ownable {
     // We only want to liquidate once so we liquidate the team funds tokens and the auto-liquidity tokens all at once.
     // After that we can split the total ETH gained between the two and supply each receiver accordingly.
     uint ethBefore = address(this).balance;
-    console.log("Total fees: %d", tokenFees);
-    console.log("Team tokens to keep: %d", teamTokensToKeep);
-    console.log("Liquidating %d tokens", teamTokensToLiquidate + autoLiquidityTokensForSwap);
     _liquidateTokens(teamTokensToLiquidate + autoLiquidityTokensForSwap, address(this));
     uint ethGained = address(this).balance - ethBefore;
     // Send team funds.
