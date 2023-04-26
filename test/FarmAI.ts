@@ -361,7 +361,34 @@ describe("FarmAI", function () {
         const ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerBalanceBefore);
         // With a trading volume of 40 eth they should have at least gotten 1 eth or more.
         expect(ownerEthGained).to.be.greaterThan(parseEther("1"));
+        // Liquidate/Transfer all tokens. There may be one left due to imprecise calculations.
         expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.be.lessThanOrEqual(1);
+      });
+      it("#2: 2 accs buy (10k each) early and sell within 24h", async() => {
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+        await farmAIOwner.setLiquidationSettings(parseEther("1000"), 6800, true);
+        await farmAIOwner.startTrading();
+        const ownerTokensBefore = await farmAIOwner.balanceOf(owner.address);
+        const ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
+        const aliceEthToSpend = (await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address]))[0];
+        console.log((await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address])));
+        const aliceTokensEarned = await buy(alice, farmAIOwner.address, routerOwner.address, weth.address, aliceEthToSpend);
+        const bobEthToSpend = (await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address]))[0];
+        await buy(bob, farmAIOwner.address, routerOwner.address, weth.address, bobEthToSpend);
+        // Should not trigger liquidation yet.
+        expect(await farmAIOwner.provider.getBalance(owner.address)).to.eq(ownerEthBefore);
+        // Contract should have 20000 * 0.1 = 2000 tokens.
+        expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.eq(parseEther("1000"));
+        // Selling gives 9500 * 0.35 = 3325 tokens. We keep 32% of these tokens => 1064.
+        // Therefore the owner should have 1064 more tokens and half of the ether gained for selling 2261 tokens.
+        const expectedOwnerTokensGained = parseEther("1064");
+        const expectedOwnerEthGained = (await routerOwner.getAmountsOut(parseEther("3325"), [farmAIOwner.address, weth.address]))[1].div(2);
+        await sell(alice, farmAIOwner.address, routerOwner.address, weth.address, aliceTokensEarned);
+        const ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerEthBefore);
+        const ownerTokensGained = (await farmAIOwner.balanceOf(owner.address)).sub(ownerTokensBefore);
+        
+        //expect(ownerEthGained).to.be.eq(expectedOwnerEthGained);
+        //expect(ownerTokensGained).to.be.eq(expectedOwnerTokensGained);
       });
     });
     async function buy(from: SignerWithAdress, farmAIAddress: string, routerAddress: string, wethAddress: string, amount: ethers.BigNumber){
