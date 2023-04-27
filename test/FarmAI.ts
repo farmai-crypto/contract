@@ -107,19 +107,19 @@ describe("FarmAI", function () {
       await expect(farmAIOwner.setFees(1337, 1664, 200, 4500)).to.be.revertedWith("FAI: TAXES_TOO_HIGH");
       await farmAIOwner.setFees(350, 150, 1100, 400);
     });
-    it("setTakeFeeFor", async() => {
+    it("setTakeFee", async() => {
       const { farmAIOwner, routerOwner, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
       const farmAIAlice = await farmAIOwner.connect(alice);
       // Disallowed by anyone but owner.
       await expect(farmAIAlice.setTakeFeeFor(alice.address, false)).to.be.revertedWith("Ownable: caller is not the owner");
       // Set and unset fees to take.
-      expect(await farmAIOwner.takeFeesFor(alice.address)).to.be.eq(false);
+      expect(await farmAIOwner.takeFees(alice.address)).to.be.eq(false);
       await farmAIOwner.setTakeFeeFor(bob.address, true);
-      expect(await farmAIOwner.takeFeesFor(alice.address)).to.be.eq(false);
+      expect(await farmAIOwner.takeFees(alice.address)).to.be.eq(false);
       await farmAIOwner.setTakeFeeFor(alice.address, true);
-      expect(await farmAIOwner.takeFeesFor(alice.address)).to.be.eq(true);
+      expect(await farmAIOwner.takeFees(alice.address)).to.be.eq(true);
       await farmAIOwner.setTakeFeeFor(alice.address, false);
-      expect(await farmAIOwner.takeFeesFor(alice.address)).to.be.eq(false);
+      expect(await farmAIOwner.takeFees(alice.address)).to.be.eq(false);
     });
     it("setIgnoreFees", async() => {
       const { farmAIOwner, routerOwner, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
@@ -163,12 +163,12 @@ describe("FarmAI", function () {
         (await farmAIOwner.TOTAL_SUPPLY()).add(1),
         10_000,
         true
-      )).to.be.revertedWith("FAI: INVALID_LIQ_SETT");
+      )).to.be.revertedWith("FAI: INVALID_LIQ_SET");
       await expect(farmAIOwner.setLiquidationSettings(
         (await farmAIOwner.TOTAL_SUPPLY()),
         10_001,
         true
-      )).to.be.revertedWith("FAI: INVALID_LIQ_SETT");
+      )).to.be.revertedWith("FAI: INVALID_LIQ_SET");
       await farmAIOwner.setLiquidationSettings(
         (await farmAIOwner.TOTAL_SUPPLY()),
         10_000,

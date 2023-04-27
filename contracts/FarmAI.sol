@@ -25,7 +25,7 @@ contract FarmAI is ERC20, Ownable {
   Fees public fees;
   address public teamWallet;
   address public liquidityWallet;
-  mapping(address => bool) public takeFeesFor;
+  mapping(address => bool) public takeFees;
   mapping(address => bool) public ignoreFees;
   mapping(address => uint16) public extraFeeOnEarlySell;
   // Swapping
@@ -51,7 +51,7 @@ contract FarmAI is ERC20, Ownable {
     // FAI pair.
     uniswapRouter = IUniswapV2Router02(uniswapRouterAddress);
     address pairAddress = IUniswapV2Factory(uniswapRouter.factory()).createPair(address(this), uniswapRouter.WETH());
-    takeFeesFor[pairAddress] = true;
+    takeFees[pairAddress] = true;
     // Super powers for deployer.
     tradingWhiteList[msg.sender] = true;
     ignoreFees[msg.sender] = true;
@@ -73,7 +73,7 @@ contract FarmAI is ERC20, Ownable {
     Fees memory transferFees = fees;
     uint feesToTake = 0;
     // Buy.
-    if(takeFeesFor[from]){
+    if(takeFees[from]){
       feesToTake += transferAmount * transferFees.buyTotal / FEE_DIVISOR;
       // Early buyers pay an additional fee if they sell within 24h.
       // Helps against sniper bots and stabilizes prices.
@@ -91,7 +91,7 @@ contract FarmAI is ERC20, Ownable {
       }
     }
     // Sell
-    if(takeFeesFor[to]){
+    if(takeFees[to]){
       feesToTake += transferAmount * transferFees.sellTotal / FEE_DIVISOR;
       // Now if people sell within the first 24h of token launch they may be paying extra fees. After that: No extra fees.
       if(block.timestamp - transferFees.takeFeesTimestamp <= 24 hours) {
@@ -99,37 +99,39 @@ contract FarmAI is ERC20, Ownable {
       }
     }
     super._transfer(from, address(this), feesToTake);
-    // Check if we want to liquidate fees
+    // Check if we want to liquidate fees.
     LiquidationSettings memory liqSettings = liquidationSettings;
-    uint contractBalance = balanceOf(address(this));
-    if(!takeFeesFor[from] && !liqSettings.inLiquidation && liqSettings.liquidationEnabled && contractBalance >= liqSettings.liquidationThreshold){
-      liquidationSettings.inLiquidation = true;
-      _liquidateFees(contractBalance, transferFees, liqSettings);
-      liquidationSettings.inLiquidation = false;
+    if(!takeFees[from] && !liqSettings.inLiquidation && liqSettings.liquidationEnabled){
+      uint contractBalance = balanceOf(address(this));
+      if(contractBalance >= liqSettings.liquidationThreshold){
+        liquidationSettings.inLiquidation = true;
+        _liquidateFees(contractBalance, transferFees, liqSettings);
+        liquidationSettings.inLiquidation = false;
+      }
     }
 
     remainingTokens = transferAmount - feesToTake;
   }
 
-  function _liquidateFees(uint tokenFees, Fees memory transferFees, LiquidationSettings memory liqSettings) private {
+  function _liquidateFees(uint tokensForLiquidation, Fees memory transferFees, LiquidationSettings memory liqSettings) private {
     // First decide how many tokens to keep as plain tokens and send them to the team wallet.
-    uint teamTokens = tokenFees * ((transferFees.buyTeam + transferFees.sellTeam)) / (transferFees.buyTotal + transferFees.sellTotal);
+    uint teamTokens = tokensForLiquidation * ((transferFees.buyTeam + transferFees.sellTeam)) / (transferFees.buyTotal + transferFees.sellTotal);
     uint teamTokensToLiquidate = teamTokens * liqSettings.percentageToLiquidate / FEE_DIVISOR;
     uint teamTokensToKeep = teamTokens - teamTokensToLiquidate;
     super._transfer(address(this), teamWallet, teamTokensToKeep);
     // Now calculate auto-liquidity tokens.
-    uint autoLiquidityTokens = tokenFees * ((transferFees.buyAutoLiquidity + transferFees.sellAutoLiquidity)) / (transferFees.buyTotal + transferFees.sellTotal);
-    uint autoLiquidityTokensForSwap = autoLiquidityTokens / 2;
+    uint autoLiquidityTokens = tokensForLiquidation * ((transferFees.buyAutoLiquidity + transferFees.sellAutoLiquidity)) / (transferFees.buyTotal + transferFees.sellTotal);
+    uint autoLiquidityTokensToLiquidate = autoLiquidityTokens / 2;
     // We only want to liquidate once so we liquidate the team funds tokens and the auto-liquidity tokens all at once.
     // After that we can split the total ETH gained between the two and supply each receiver accordingly.
     uint ethBefore = address(this).balance;
-    _liquidateTokens(teamTokensToLiquidate + autoLiquidityTokensForSwap, address(this));
+    _liquidateTokens(teamTokensToLiquidate + autoLiquidityTokensToLiquidate, address(this));
     uint ethGained = address(this).balance - ethBefore;
     // Send team funds.
-    uint ethForTeam = ethGained * teamTokensToLiquidate / (teamTokensToLiquidate + autoLiquidityTokensForSwap);
+    uint ethForTeam = ethGained * teamTokensToLiquidate / (teamTokensToLiquidate + autoLiquidityTokensToLiquidate);
     payable(teamWallet).transfer(ethForTeam);
     // Auto-liquidity
-    _autoLiquidity(autoLiquidityTokensForSwap, ethGained - ethForTeam, liquidityWallet);
+    _autoLiquidity(autoLiquidityTokensToLiquidate, ethGained - ethForTeam, liquidityWallet);
   }
 
   function _liquidateTokens(uint tokenAmount, address to) private {
@@ -152,11 +154,9 @@ contract FarmAI is ERC20, Ownable {
 
   // Utility functions.
   // Recovery
-  // Reclaim tokens accidentally sent to contract.
   function recoverERC20(address token, uint balance) external onlyOwner {
     IERC20(token).transfer(owner(), balance);
   }
-  // Recover ETH sent to contract.
   function recoverETH(uint balance) external onlyOwner {
     payable(owner()).transfer(balance);
   }
@@ -174,9 +174,9 @@ contract FarmAI is ERC20, Ownable {
     }
   // Set who should be taxed in general.
   function setTakeFeeFor(address target, bool takeFee) external onlyOwner {
-    takeFeesFor[target] = takeFee;
+    takeFees[target] = takeFee;
   }
-  // Set who should be ignored from taxes. This is stronger than `takeFeesFor`.
+  // Set who should be ignored from taxes. This is stronger than `takeFees`.
   function setIgnoreFees(address target, bool ignoreFee) external onlyOwner {
     ignoreFees[target] = ignoreFee;
   }
@@ -191,11 +191,14 @@ contract FarmAI is ERC20, Ownable {
   }
   // Update liquidation settings.
   function setLiquidationSettings(uint128 liquidationThreshold, uint16 percentageToLiquidate, bool liquidationEnabled) external onlyOwner {
-    require(liquidationThreshold <= TOTAL_SUPPLY && percentageToLiquidate <= 10_000, "FAI: INVALID_LIQ_SETT");
+    require(liquidationThreshold <= TOTAL_SUPPLY && percentageToLiquidate <= 10_000, "FAI: INVALID_LIQ_SET");
     liquidationSettings = LiquidationSettings(liquidationThreshold, percentageToLiquidate, false, liquidationEnabled);
   }
   // Trading
-  function startTrading() external onlyOwner { tradingEnabled = true; fees.takeFeesTimestamp = uint64(block.timestamp); }
+  function startTrading() external onlyOwner { 
+    tradingEnabled = true; 
+    fees.takeFeesTimestamp = uint64(block.timestamp); 
+  }
   function whiteListTrade(address target, bool _canTrade) external onlyOwner {
     tradingWhiteList[target] = _canTrade;
   }
