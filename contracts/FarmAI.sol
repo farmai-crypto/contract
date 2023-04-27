@@ -67,8 +67,6 @@ contract FarmAI is ERC20, Ownable {
   }
 
   function _takeFees(address from, address to, uint256 transferAmount) private returns(uint256 remainingTokens) {
-    // No fees to take.
-    if(!takeFeesFor[from] && !takeFeesFor[to]) return transferAmount;
     // Skip certain wallets.
     if(ignoreFees[from] || ignoreFees[to]) return transferAmount;
     // Take fees.
@@ -76,13 +74,13 @@ contract FarmAI is ERC20, Ownable {
     uint feesToTake = 0;
     // Buy.
     if(takeFeesFor[from]){
-      feesToTake += transferAmount * fees.buyTotal / FEE_DIVISOR;
+      feesToTake += transferAmount * transferFees.buyTotal / FEE_DIVISOR;
       // Early buyers pay an additional fee if they sell within 24h.
       // Helps against sniper bots and stabilizes prices.
       // Within 5min of start:  Extra 25% on sell.
       // Within 15min of start: Extra 15% on sell.
       // Within 30min of start: Extra 10% on sell.
-      uint secondsPassedSinceStart = block.timestamp - fees.takeFeesTimestamp;
+      uint secondsPassedSinceStart = block.timestamp - transferFees.takeFeesTimestamp;
       if(secondsPassedSinceStart <= 30 minutes && extraFeeOnEarlySell[to] == 0){
         if(secondsPassedSinceStart <= 5 minutes)
           extraFeeOnEarlySell[to] = 2_500;
@@ -94,9 +92,9 @@ contract FarmAI is ERC20, Ownable {
     }
     // Sell
     if(takeFeesFor[to]){
-      feesToTake += transferAmount * fees.sellTotal / FEE_DIVISOR;
+      feesToTake += transferAmount * transferFees.sellTotal / FEE_DIVISOR;
       // Now if people sell within the first 24h of token launch they may be paying extra fees. After that: No extra fees.
-      if(block.timestamp - fees.takeFeesTimestamp <= 24 hours) {
+      if(block.timestamp - transferFees.takeFeesTimestamp <= 24 hours) {
         feesToTake += transferAmount * extraFeeOnEarlySell[from] / FEE_DIVISOR;
       }
     }
