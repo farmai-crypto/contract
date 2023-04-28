@@ -45,7 +45,7 @@ contract FarmAI is ERC20, Ownable {
 
 
   constructor(address uniswapRouterAddress) ERC20("FarmAI Token", "FAI") {
-    fees = Fees(500, 500, 1_000, 500, 500, 1_000, 0);
+    fees = Fees(300, 200, 500, 300, 200, 500, 0);
     liquidationSettings = LiquidationSettings(1_000 ether, 10_000, false, true);
     teamWallet = liquidityWallet = msg.sender;
     // FAI pair.
