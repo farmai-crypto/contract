@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.11;
+pragma solidity ^0.8.18;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
-import "hardhat/console.sol";
 
 interface IUniswapV2Factory {
     function createPair(address tokenA, address tokenB) external returns (address pair);
@@ -142,10 +141,10 @@ contract FarmAI is ERC20, Ownable {
     );
   }
 
-  function _autoLiquidity(uint fatTokens, uint eth, address liquidityTokenReceiver) private {
+  function _autoLiquidity(uint faiTokens, uint eth, address liquidityTokenReceiver) private {
     uniswapRouter.addLiquidityETH{value: eth}(
       address(this),
-      fatTokens,
+      faiTokens,
       0, 0,
       liquidityTokenReceiver,
       block.timestamp
