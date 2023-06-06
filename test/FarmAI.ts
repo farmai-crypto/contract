@@ -4,6 +4,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 import { NumberLike } from "@nomicfoundation/hardhat-network-helpers/dist/src/types";
 import { FarmAI } from "../typechain-types";
+import { BigNumberish } from "ethers";
 
 const parseEther = ethers.utils.parseEther;
 const inFutureTime = async() => (await time.latest()) + 3_000;
@@ -364,9 +365,19 @@ describe("FarmAI", function () {
         // Liquidate/Transfer all tokens. There may be one left due to imprecise calculations.
         expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.be.lessThanOrEqual(2);
       });
+
       it("#2: 2 accs buy (10k each) early and sell within 24h", async() => {
+        await buyTwiceAndAliceSells(6800);
+      });
+      it("#3: 2 accs buy (10k each) early and sell within 24h, but liquidate 0% team fees", async() => {
+        await buyTwiceAndAliceSells(0);
+      });
+      it("#3: 2 accs buy (10k each) early and sell within 24h, but liquidate 100% team fees", async() => {
+        await buyTwiceAndAliceSells(10000);
+      });
+      async function buyTwiceAndAliceSells(teamLiquidationPercentage: BigNumberish){
         const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        await farmAIOwner.setLiquidationSettings(parseEther("1000"), 6800, true);
+        await farmAIOwner.setLiquidationSettings(parseEther("1000"), teamLiquidationPercentage, true);
         await farmAIOwner.startTrading();
         const ownerTokensBefore = await farmAIOwner.balanceOf(owner.address);
         let ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
@@ -385,59 +396,24 @@ describe("FarmAI", function () {
         await farmAIOwner.transfer("0x0000000000000000000000000000000000000001", 36);
         expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.eq(contractTokenFees);
         // Selling gives 9000 * 0.30 = 2700 tokens => 2700 + 1000 = 3700. 
-        // Half of 2220 are for the team and we keep 32% of these tokens => 710.4.
-        // Therefore the owner should have about 710.4 more tokens and half of the ether gained for selling the remaining tokens.
-        const expectedOwnerTokensGained = parseEther("710.4");
+        // 60% of 3700 tokens are for the team => 2220.
+        // Half of 2220 are for the team and we keep `teamLiquidationPercentage`% of these tokens.
+        const expectedOwnerTokensGained = parseEther("2220").mul(ethers.BigNumber.from(10000).sub(teamLiquidationPercentage)).div(10000);
+        const ownerTokensForLiquidity = parseEther("2220").sub(expectedOwnerTokensGained);
         ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
-        // Contract will sell 2249.6 tokens:
-        // Team: 3700 / 3 / 5 = 2220 * 0.68 = 1509.6 (57.62%)
-        // AutoLP: 3700 * 2 / 5 / 2 = 740 (42.37%)
-        const ethGainedForSellingFees = (await routerOwner.getAmountsOut(parseEther("2249.6"), [farmAIOwner.address, weth.address]))[1];
-        const expectedOwnerEthGained = ethGainedForSellingFees.mul(ethers.BigNumber.from("15096")).div(ethers.BigNumber.from("22496"));
+        // Contract will sell 740 LP tokens plus remainer of team tokens:
+        // Team: 3700 / 3 / 5 = 2220 * (10000 - `teamLiquidationPercentage`) / 10000 = ???
+        // AutoLP: 3700 * 2 / 5 / 2 = 740 (???%)
+        const totalTokensSoldForLiquidity = parseEther("740").add(ownerTokensForLiquidity);
+        const ethGainedForSellingFees = (await routerOwner.getAmountsOut(totalTokensSoldForLiquidity, [farmAIOwner.address, weth.address]))[1];
+        const expectedOwnerEthGained = ethGainedForSellingFees.mul(ownerTokensForLiquidity).div(totalTokensSoldForLiquidity);
         await sell(alice, farmAIOwner.address, routerOwner.address, weth.address, parseEther("9000"));
         const ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerEthBefore);
         const ownerTokensGained = (await farmAIOwner.balanceOf(owner.address)).sub(ownerTokensBefore);
         
         expect(ownerEthGained).to.be.eq(expectedOwnerEthGained);
         expect(ownerTokensGained).to.be.eq(expectedOwnerTokensGained);
-      });
-      it("#2: 2 accs buy (10k each) early and sell within 24h, but liquidate 0% team fees", async() => {
-        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        await farmAIOwner.setLiquidationSettings(parseEther("1000"), 0, true);
-        await farmAIOwner.startTrading();
-        const ownerTokensBefore = await farmAIOwner.balanceOf(owner.address);
-        let ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
-        const aliceEthToSpend = (await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address]))[0];
-        const aliceTokensToEarn = (await routerOwner.getAmountsOut(aliceEthToSpend, [weth.address, farmAIOwner.address]))[1];
-        await buy(alice, farmAIOwner.address, routerOwner.address, weth.address, aliceEthToSpend);
-        const bobEthToSpend = (await routerOwner.getAmountsIn(parseEther("10000"), [weth.address, farmAIOwner.address]))[0];
-        const bobTokensToEarn = (await routerOwner.getAmountsOut(bobEthToSpend, [weth.address, farmAIOwner.address]))[1];
-        await buy(bob, farmAIOwner.address, routerOwner.address, weth.address, bobEthToSpend);
-        // Should not trigger liquidation yet.
-        expect(await farmAIOwner.provider.getBalance(owner.address)).to.eq(ownerEthBefore);
-        // Contract should have around 20000 * 0.05 = 1000 tokens.
-        const contractTokenFees = parseEther("1000");
-        // Rounding errors occur. Send 73 tokens to zero wallet to proceed calculation with nice values.
-        await farmAIOwner.recoverERC20(farmAIOwner.address, 36);
-        await farmAIOwner.transfer("0x0000000000000000000000000000000000000001", 36);
-        expect(await farmAIOwner.balanceOf(farmAIOwner.address)).to.eq(contractTokenFees);
-        // Selling gives 9000 * 0.30 = 2700 tokens => 2700 + 1000 = 3700. 
-        // Half of 2220 are for the team and we keep 100% of these tokens => 2220.
-        // Therefore the owner should have 2220 more tokens.
-        const expectedOwnerTokensGained = parseEther("2220");
-        ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
-        // Contract will sell 740 tokens:
-        // Team: 3700 / 3 / 5 = 2220 * 0 = 0 (0%)
-        // AutoLP: 3700 * 2 / 5 / 2 = 740 (100%)
-        const ethGainedForSellingFees = (await routerOwner.getAmountsOut(parseEther("740"), [farmAIOwner.address, weth.address]))[1];
-        const expectedOwnerEthGained = parseEther("0");
-        await sell(alice, farmAIOwner.address, routerOwner.address, weth.address, parseEther("9000"));
-        const ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerEthBefore);
-        const ownerTokensGained = (await farmAIOwner.balanceOf(owner.address)).sub(ownerTokensBefore);
-        
-        expect(ownerEthGained).to.be.eq(expectedOwnerEthGained);
-        expect(ownerTokensGained).to.be.eq(expectedOwnerTokensGained);
-      });
+      }
     });
     async function buy(from: SignerWithAdress, farmAIAddress: string, routerAddress: string, wethAddress: string, amount: ethers.BigNumber){
       const userContract = await (await (await ethers.getContractFactory("FarmAI")).connect(from)).attach(farmAIAddress);
