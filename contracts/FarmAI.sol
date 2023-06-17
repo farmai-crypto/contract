@@ -5,10 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 
-interface IUniswapV2Factory {
-    function createPair(address tokenA, address tokenB) external returns (address pair);
-}
-
 contract FarmAI is ERC20, Ownable {
   /// General settings
   uint constant public TOTAL_SUPPLY = 1_000_000 ether;
