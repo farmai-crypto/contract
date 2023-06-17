@@ -29,6 +29,10 @@ describe("FarmAI", function () {
     const factoryContract = await FarmAIUniswapFactory.deploy();
     const routerOwner = await FarmAIUniswapRouter.deploy(factoryContract.address, weth.address);
     const farmAIOwner = await FarmAI.deploy(routerOwner.address);
+    // Create pair and register taxes.
+    await factoryContract.createPair(weth.address, farmAIOwner.address);
+    const pairAddress = await factoryContract.getPair(weth.address, farmAIOwner.address);
+    await farmAIOwner.setTakeFeeFor(pairAddress, true);
     // Provide liquidity.
     await farmAIOwner.approve(routerOwner.address, ethers.constants.MaxUint256);
     await routerOwner.addLiquidityETH(
@@ -306,6 +310,28 @@ describe("FarmAI", function () {
         const ethGained = await sell(bob, farmAIOwner.address, routerBob.address, weth.address, tokensGained);
         expect(ethGained).to.eq(expectedEthToGain);
       });
+      it("Only liquidate after threshold", async() => {
+        const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
+        const routerBob = await routerOwner.connect(bob);
+        await farmAIOwner.startTrading();
+        await time.increase(3 * 24 * 60 * 60);
+        // 1980 tokens to buy should give 99 tokens as fee.
+        const ethNeededForTokens = (await routerOwner.getAmountsIn(parseEther("1980"), [weth.address, farmAIOwner.address]))[0];
+        const contractTokensBefore = await farmAIOwner.balanceOf(farmAIOwner.address);
+        let tokensGained = await buy(bob, farmAIOwner.address, routerBob.address, weth.address, ethNeededForTokens);
+        const contractTokensEarned = (await farmAIOwner.balanceOf(farmAIOwner.address)).sub(contractTokensBefore);
+        expect(contractTokensEarned).to.gte(parseEther("99"));
+        // Owner should not receive any eth now.
+        const ownerEthBalanceBefore = await farmAIOwner.provider.getBalance(owner.address);
+        await sell(bob, farmAIOwner.address, routerBob.address, weth.address, parseEther("1"));
+        tokensGained = await buy(bob, farmAIOwner.address, routerBob.address, weth.address, ethNeededForTokens);
+        let ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerEthBalanceBefore);
+        expect(ownerEthGained).to.eq(parseEther("0"));
+        // Selling now should trigger liquidation.
+        await sell(bob, farmAIOwner.address, routerBob.address, weth.address, tokensGained);
+        ownerEthGained = (await farmAIOwner.provider.getBalance(owner.address)).sub(ownerEthBalanceBefore);
+        expect(ownerEthGained).to.be.gt(parseEther("0"));
+      });
       describe("Within 24h", async() => {
         it("Buy after 3m => 35% fee", async() =>{ await buysAndSellAfter([3 * MINUTE], [{after: 4 * HOUR, fee: 30}]); });
         it("Buy after 5m => 35% fee", async() =>{ await buysAndSellAfter([5 * MINUTE], [{after: 4 * HOUR, fee: 30}]); });
@@ -366,7 +392,7 @@ describe("FarmAI", function () {
       });
       it("#2: 2 accs buy (10k each) early and sell within 24h", async() => {
         const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        await farmAIOwner.setLiquidationSettings(parseEther("1000"), 6800, true);
+        await farmAIOwner.setLiquidationSettings(parseEther("100"), 6800, true);
         await farmAIOwner.startTrading();
         const ownerTokensBefore = await farmAIOwner.balanceOf(owner.address);
         let ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);
@@ -403,7 +429,7 @@ describe("FarmAI", function () {
       });
       it("#2: 2 accs buy (10k each) early and sell within 24h, but liquidate 0% team fees", async() => {
         const { farmAIOwner, routerOwner, weth, owner, alice, bob } = await loadFixture(deployFarmAIFixture);
-        await farmAIOwner.setLiquidationSettings(parseEther("1000"), 0, true);
+        await farmAIOwner.setLiquidationSettings(parseEther("100"), 0, true);
         await farmAIOwner.startTrading();
         const ownerTokensBefore = await farmAIOwner.balanceOf(owner.address);
         let ownerEthBefore = await farmAIOwner.provider.getBalance(owner.address);

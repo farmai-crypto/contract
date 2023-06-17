@@ -45,12 +45,10 @@ contract FarmAI is ERC20, Ownable {
 
   constructor(address uniswapRouterAddress) ERC20("FarmAI Token", "FAI") {
     fees = Fees(300, 200, 500, 300, 200, 500, 0);
-    liquidationSettings = LiquidationSettings(1_000 ether, 10_000, false, true);
+    liquidationSettings = LiquidationSettings(100 ether, 10_000, false, true);
     teamWallet = liquidityWallet = msg.sender;
     // FAI pair.
     uniswapRouter = IUniswapV2Router02(uniswapRouterAddress);
-    address pairAddress = IUniswapV2Factory(uniswapRouter.factory()).createPair(address(this), uniswapRouter.WETH());
-    takeFees[pairAddress] = true;
     // Super powers for deployer.
     tradingWhiteList[msg.sender] = true;
     ignoreFees[msg.sender] = true;
@@ -195,6 +193,7 @@ contract FarmAI is ERC20, Ownable {
   }
   // Trading
   function startTrading() external onlyOwner { 
+    require(tradingEnabled == false, "FAI: ALREADY_STARTED");
     tradingEnabled = true; 
     fees.takeFeesTimestamp = uint64(block.timestamp); 
   }
